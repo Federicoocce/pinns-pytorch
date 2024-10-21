@@ -23,17 +23,20 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # epochs = 1444, step_lr_epochs = 2000, step_lr_gamma = 0.01, period = 5, dataset_size = 10000
 
 epochs = 2000
-num_inputs = 2 #x, t
+num_inputs = 3 #x, y, t
 
 u_min = -0.21
 u_max = 0.0
 x_min = 0.0
 x_max = 1.0
+y_min = 0.0
+y_max = 1.0
 t_f = 10
 f_min = -3.0
 f_max = 0.0
 delta_u = u_max - u_min
 delta_x = x_max - x_min
+delta_y = y_max - y_min
 delta_f = f_max - f_min
 
 params = {
@@ -41,6 +44,8 @@ params = {
     "u_max": u_max,
     "x_min": x_min,
     "x_max": x_max,
+    "y_min": y_min,
+    "y_max": y_max,
     "t_f": t_f,
     "f_min": f_min,
     "f_max": f_max
@@ -48,37 +53,51 @@ params = {
 
 def hard_constraint(x, y):
     X = x[0]
+    Y = x[1]
     tau = x[-1]
-    U = ((X-1)*X*(delta_x**2)*t_f*tau)*(y+(u_min/delta_u)) - (u_min/delta_u)
+    U = ((X-1)*X*(Y-1)*Y*t_f*tau)*(1/delta_u)* - (u_min/delta_u)
+    print("U:", U)
+    print(x, y, tau)
     return U
 
 def f(sample):
     x = sample[0]*(delta_x) + x_min
-    #x_f = sample[1]*(delta_x) + x_min
-    x_f = 0.2*(delta_x) + x_min
-    #h = sample[2]*(delta_f) + f_min
+    y = sample[1]*(delta_y) + y_min
+
     h = f_min
     
-    z = h * torch.exp(-400*((x-x_f)**2))
+    z = h * torch.exp(-100*((x-delta_x/2)**2+(y-delta_y/2)**2))
     return z
 
 
 def pde_fn(model, sample):
-    T = 1
-    mu = 1
-    k = 1
-    alpha_2 = (T/mu)*(t_f**2)/(delta_x**2)
-    beta = (t_f**2)/delta_u
-    K = k * t_f
+
+    # Physics Parameters
+    sigma = 1.0 #kg/m^2
+    T = 25.0  #N/m
+    v = (T / sigma)**0.5 
+
+    a = (v**2)*(t_f**2)/(delta_x**2)
+    b = (v**2)*(t_f**2)/(delta_y**2)
+    c = (t_f**2)/delta_u
+
+    print(sample)
     J, d = _jacobian(model, sample)
+
+    print("Dimensione di J:", J)
+    print("Dimensione di J:", J[0])
+
     dX = J[0][0]
+    dY = J[0][1]
     dtau = J[0][-1]
     #H = _jacobian(d, sample)[0]
     #ddX = H[0][0, 0]
     #ddtau = H[0][-1, -1]
     ddX = _jacobian(d, sample, i=0, j=0)[0][0]
-    ddtau = _jacobian(d, sample, i=1, j=1)[0][0]
-    return ddtau - alpha_2*ddX - beta*f(sample) + K*dtau
+    ddY = _jacobian(d, sample, i=1, j=1)[0][0]
+    ddtau = _jacobian(d, sample, i=2, j=2)[0][0]
+
+    return ddtau - (a*ddX + b*ddY) - c* f(sample)
 
 
 def ic_fn_vel(model, sample):
@@ -88,7 +107,6 @@ def ic_fn_vel(model, sample):
     ics = torch.zeros_like(dt)
     return dt, ics
 
-
 batchsize = 500
 learning_rate = 0.002203836177626117
 
@@ -96,8 +114,8 @@ print("Building Domain Dataset")
 domainDataset = DomainDataset([0.0]*num_inputs,[1.0]*num_inputs, 10000, period = 3)
 print("Building IC Dataset")
 icDataset = ICDataset([0.0]*(num_inputs-1),[1.0]*(num_inputs-1), 10000, period = 3)
-print("Building Domain Supervised Dataset")
-dsdDataset = DomainSupervisedDataset("C:\\Users\\desan\\Documents\\Wolfram Mathematica\\file.csv", 1000)
+#print("Building Domain Supervised Dataset")
+#dsdDataset = DomainSupervisedDataset("C:\\Users\\desan\\Documents\\Wolfram Mathematica\\file.csv", 1000)
 print("Building Validation Dataset")
 validationDataset = DomainDataset([0.0]*num_inputs,[1.0]*num_inputs, batchsize, shuffle = False)
 print("Building Validation IC Dataset")
@@ -111,8 +129,8 @@ r = ResidualComponent(pde_fn, domainDataset)
 component_manager.add_train_component(r)
 ic = ICComponent([ic_fn_vel], icDataset)
 component_manager.add_train_component(ic)
-d = SupervisedComponent(dsdDataset)
-component_manager.add_train_component(d)
+#d = SupervisedComponent(dsdDataset)
+#component_manager.add_train_component(d)
 r = ResidualComponent(pde_fn, validationDataset)
 component_manager.add_validation_component(r)
 ic = ICComponent([ic_fn_vel], validationicDataset)
